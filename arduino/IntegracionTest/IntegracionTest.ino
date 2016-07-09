@@ -31,6 +31,11 @@ int temp;
 int AcX, AcY, AcZ, GyX, GyY, GyZ, magX, magY, magZ, lux;
 // Valor de los sensores LDR.
 int ls1, ls2, ls3, ls4;
+// Corrección de Temperatura
+float lsbPerDegreeDelSensor = 340.00;
+int offsetDelSensor = 8;
+int calibracionDelSensor = 26;
+
 int valor = 0;
 unsigned int packetNumber = 0;
 unsigned int milsec, milsecOffset = 0;
@@ -93,7 +98,12 @@ void loop() {
   milsec = milsec - milsecOffset;
 
   read_MPU6050();
+  temp = temp/lsbPerDegreeDelSensor;
+  temp += offsetDelSensor;
+  temp += calibracionDelSensor;
+
   hmc5883l_singleread();
+
   read_bh1750FVI();
   ls1 = analogRead(A0);
   ls2 = analogRead(A1);
@@ -104,19 +114,23 @@ void loop() {
   out += ";";
   out += String(milsec);
   out += ";";
+  
   out += String(AcX);
   out += ";";
   out += String(AcY);
   out += ";";
   out += String(AcZ);
   out += ";";
+  
   out += String(temp);
   out += ";";
+
   out += String(GyX);
   out += ";";
   out += String(GyY);
   out += ";";
   out += String(GyZ);
+
   out += ";";
   out += String(magX);
   out += ";";
@@ -124,7 +138,9 @@ void loop() {
   out += ";";
   out += String(magZ);
   out += ";";
+  
   out += String(lux);
+
 /*  out += ";";
   if (ls1 >= 500) {
     out += "1;"; 
@@ -160,11 +176,11 @@ void loop() {
 
   
   //msg = "25;12762;-524;516;17360;-3136;212;131;32;409;-256;-217;226;1;1;1;1\0";
-  Serial.print("\t Enviando: [");
-  Serial.print(msg);
-  Serial.println("]");
-  driver.send((uint8_t *)msg, strlen(msg));
-  driver.waitPacketSent();
+  //Serial.print("\t Enviando: [");
+  //Serial.print(msg);
+  //Serial.println("]");
+  //driver.send((uint8_t *)msg, strlen(msg));
+  //driver.waitPacketSent();
   
   packetNumber += 1;
   delay(500); 
