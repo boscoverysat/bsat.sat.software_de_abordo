@@ -11,6 +11,12 @@
   
   Este codigo se deriva del que se encuentra en:
   http://playground.arduino.cc/Main/MPU-6050#sketch
+
+  Todo el cálculo de los ángulos yrp se deriva de 
+  http://www.geekmomprojects.com/mpu-6050-redux-dmp-data-fusion-vs-complementary-filter/#
+
+  Este cálculo requiere del uso de la entrada de interrupción de arduino, situada en el pin 2
+  en el caso del Arduino Uno. Debe conectarse a la salida INT del MPU6050.
   
 ******************************/
 #include "MPU6050Constants.h"
@@ -20,14 +26,29 @@
 #include <RH_ASK.h>
 #include <SPI.h>
 
+// Librerías requeridas para el cálculo de la orientación.
+// Las librerías I2Cdev and MPU6050 deben instalarse en el IDE como librerías,
+// o situarlas en el path de includes del proyecto.
+
+#include "I2Cdev.h"
+
+#include "MPU6050_6Axis_MotionApps20.h"
+
+// Objeto que representa a la unidad de medición inercial.
+MPU6050 mpu;
+
+
+
+
 //Tamaño maximo buffer trasnmision.
 // 61 caracteres como maximo y el caracter null \0 solo salida IMU
 //const int MAX_BUFFER = 62;
 // Si sumamos la salida del magnetometro:
 const int MAX_BUFFER = 100;
 
-int temp;
+
 // Magnitudes de los sensores.
+int temp;
 int AcX, AcY, AcZ, GyX, GyY, GyZ, magX, magY, magZ, lux;
 // Valor de los sensores LDR.
 int ls1, ls2, ls3, ls4;
@@ -46,6 +67,43 @@ RH_ASK driver(2000, 8, 7, 10, false);
 char msg[MAX_BUFFER];
 //char *msg;
 
+// Variables requeridas para el cálculo de la orientación.
+bool dmpReady = false;  // True si la inicialización del DMP es correcta.
+uint8_t mpuIntStatus;   // Almacena el byte de status de la interrupción de la MPU.
+uint8_t devStatus;      // Devuelve el estado del dispositivo MPU tras cada operación (0 = OK, !0 = error)
+uint16_t packetSize;    // Tamaño de paquete DMP (default is 42 bytes)
+uint16_t fifoCount;     // Contador del número de bytes almacenados en FIFO.
+uint8_t fifoBuffer[64]; // Buffer de almacenamiento FIFO.
+
+// Orientation/motion variables
+Quaternion q;
+VectorFloat gravity;
+float euler[3];
+float ypr[3];
+
+// This global variable tells us how to scale gyroscope data
+float    GYRO_FACTOR;
+
+// This global varible tells how to scale acclerometer data
+float    ACCEL_FACTOR;
+
+
+// Variables to store the values from the sensor readings
+int16_t ax, ay, az;
+int16_t gx, gy, gz;
+
+const float RADIANS_TO_DEGREES = 57.2958;
+
+
+/************************************************************************
+ * Rutina de detección de interrupción.
+ * 
+ */
+ 
+volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
+void dmpDataReady() {
+    mpuInterrupt = true;
+}
 
 void setup() {
   
@@ -65,7 +123,7 @@ void setup() {
   ls3 = 0;
   ls4 = 0;
   
-  Serial.begin(9600);
+  Serial.begin(57600);
 
   if (driver.init()) {
     // Si el enlace de radio funciona, encendemos el led L de la placa.
@@ -75,7 +133,63 @@ void setup() {
   Wire.begin();
   
   Serial.println("Configurando MPU6050");
-  configure_MPU6050();
+  //configure_MPU6050();
+  mpu.initialize();
+
+  // verify connection
+  Serial.println(F("Probando conexion al dispositivo..."));
+  Serial.println(mpu.testConnection() ? F("MPU6050 conexion correcta") : F("MPU6050 fallo en la conexion"));
+
+  Serial.println(F("Inicializando DMP..."));
+  devStatus = mpu.dmpInitialize();
+
+  // Si el valor es 0 todo ha ido como se esperaba
+  if (devStatus == 0) {
+      // Habilitamos el DMP.
+      Serial.println(F("Habilitando DMP..."));
+      mpu.setDMPEnabled(true);
+  
+      // Habilitamos la detección de interrupciones.
+      Serial.println(F("Habilitando detección de interrupciones (Arduino external interrupt 0)..."));
+      attachInterrupt(0, dmpDataReady, RISING);
+      mpuIntStatus = mpu.getIntStatus();
+  
+      // Ponemos a true el flag dmpReady
+      Serial.println(F("DMP list, esperando primera interrupción..."));
+      dmpReady = true;
+  
+      // Establecemos el rango max de escala para el giroscopio.
+      uint8_t FS_SEL = 0;
+
+  
+      // Obtenemos el valor de rango maximo de escala para el giroscopio.
+      // Devuelve valores entre 0 y 3
+      uint8_t READ_FS_SEL = mpu.getFullScaleGyroRange();
+      Serial.print("FS_SEL = ");
+      Serial.println(READ_FS_SEL);
+      GYRO_FACTOR = 131.0/(FS_SEL + 1);
+      
+  
+      // Obtenemos rango maximo de escala del acelerometro.
+      uint8_t READ_AFS_SEL = mpu.getFullScaleAccelRange();
+      Serial.print("AFS_SEL = ");
+      Serial.println(READ_AFS_SEL);
+  
+      // Se obtiene el tamanno maximo de paquete DMP
+      packetSize = mpu.dmpGetFIFOPacketSize();
+  } else {
+      // ERROR!
+      // 1 = Carga inicial de memoria fallida
+      // 2 = Actualizacion de configuracion DMP fallida.
+      // (lo habitual es que el error sea 1)
+      Serial.print(F("Inicializacion DMP fallida (code "));
+      Serial.print(devStatus);
+      Serial.println(F(")"));
+  }
+
+
+  
+  
   Serial.println("Configurando HMC5883L");
   configure_hmc5883l();
   Serial.println("Configurando BH1750FVI");
@@ -97,10 +211,57 @@ void loop() {
   milsec = millis();
   milsec = milsec - milsecOffset;
 
-  read_MPU6050();
-  temp = temp/lsbPerDegreeDelSensor;
-  temp += offsetDelSensor;
-  temp += calibracionDelSensor;
+  // read_MPU6050();
+  // temp = temp/lsbPerDegreeDelSensor;
+  // temp += offsetDelSensor;
+  // temp += calibracionDelSensor;
+
+  //read_MPU6050();
+  mpu.getMotion6(&AcX, &AcY, &AcZ, &GyX, &GyY, &GyZ);
+
+  // Si se ha producido la interrupción
+  if (mpuInterrupt) {
+    // Reseteamos el flag de interrupción
+    mpuInterrupt = false;
+    mpuIntStatus = mpu.getIntStatus();
+  
+    // Calculamos el número de bytes en FIFO.
+    fifoCount = mpu.getFIFOCount();
+  
+    // Comprobamos si hay overflow (Esto no debería pasar)
+    if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
+        // Reseteamos la FIFO.
+        mpu.resetFIFO();
+        Serial.println(F("FIFO overflow!"));
+  
+    // En cualquier otro caso, comprobamos que existan datos.
+    } else if (mpuIntStatus & 0x02) {
+        // wait for correct available data length, should be a VERY short wait
+        while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
+  
+        // read a packet from FIFO
+        mpu.getFIFOBytes(fifoBuffer, packetSize);
+        
+        // track FIFO count here in case there is > 1 packet available
+        // (this lets us immediately read more without waiting for an interrupt)
+        fifoCount -= packetSize;
+        
+        
+        // Obtain YPR angles from buffer
+        mpu.dmpGetQuaternion(&q, fifoBuffer);
+        mpu.dmpGetGravity(&gravity, &q);
+        mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+
+/*
+       Serial.print("DMP:");
+       Serial.print(ypr[2]*RADIANS_TO_DEGREES, 2);
+       Serial.print(":");
+       Serial.print(-ypr[1]*RADIANS_TO_DEGREES, 2);
+       Serial.print(":");
+       Serial.println(ypr[0]*RADIANS_TO_DEGREES, 2);
+ */      
+    }
+  }
 
   hmc5883l_singleread();
 
@@ -114,7 +275,15 @@ void loop() {
   out += ";";
   out += String(milsec);
   out += ";";
-  
+  // Primer valor, rotación sobre eje X.
+  // Segundo valor, rotación sobre eje Y.
+  // Tercer valor, rotación sobre eje Z.
+  out += String(ypr[2] * RADIANS_TO_DEGREES);
+  out += ";";
+  out += String(ypr[1] * RADIANS_TO_DEGREES);
+  out += ";";
+  out += String(ypr[0] * RADIANS_TO_DEGREES);
+  out += ";";
   out += String(AcX);
   out += ";";
   out += String(AcY);
@@ -141,49 +310,27 @@ void loop() {
   
   out += String(lux);
 
-/*  out += ";";
-  if (ls1 >= 500) {
-    out += "1;"; 
-  }
-  else {
-    out += "0;"; 
-  }
-  if (ls2 >= 500) {
-    out += "1;"; 
-  }
-  else {
-    out += "0;"; 
-  }
-  if (ls3 >= 500) {
-    out += "1;"; 
-  }
-  else {
-    out += "0;"; 
-  }
-  if (ls4 >= 500) {
-    out += "1"; 
-  }
-  else {
-    out += "0"; 
-  }*/
   out += "\n";
   //Serial.println("Temperatura: ");
   //Serial.println(temp/340.00+36.53);
 
   Serial.println(out);
-  out.toCharArray(msg, out.length() +1 );
-  //out.toCharArray(msg, out.length() );
+  
+  // El codigo de envio utilizando RF es demasiado lento y provoca
+  // el overflow del buffer FIFO para el calculo de la orientacion.
+  //out.toCharArray(msg, out.length() +1 );
 
   
   //msg = "25;12762;-524;516;17360;-3136;212;131;32;409;-256;-217;226;1;1;1;1\0";
-  //Serial.print("\t Enviando: [");
-  //Serial.print(msg);
-  //Serial.println("]");
-  //driver.send((uint8_t *)msg, strlen(msg));
-  //driver.waitPacketSent();
+
+/*  Serial.print("\t Enviando: [");
+  Serial.print(msg);
+  Serial.println("]");
+  driver.send((uint8_t *)msg, strlen(msg));
+  driver.waitPacketSent();
   
-  packetNumber += 1;
-  delay(500); 
+  packetNumber += 1;*/
+  //delay(500); 
 }
 
 void configure_MPU6050() {
