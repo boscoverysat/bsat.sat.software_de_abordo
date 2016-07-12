@@ -5,7 +5,7 @@
 
 #define Power_On 0x01
 
-#define reset 0x07
+#define reset_BH1750 0x07
 
 #define Continuous_H_resolution_Mode  0x10
 
