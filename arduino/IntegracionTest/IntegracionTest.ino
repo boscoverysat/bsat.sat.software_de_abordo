@@ -19,11 +19,12 @@
   en el caso del Arduino Uno. Debe conectarse a la salida INT del MPU6050.
   
 ******************************/
+#include <BH1750.h>
 #include <SparkFunHTU21D.h>
 #include "MPU6050Constants.h"
 #include "HMC5883LConstants.h"
-#include "BH1750FVIConstants.h"
 #include <Wire.h>
+#include "BH1750FVIConstants.h"
 #include <RH_ASK.h>
 #include <SPI.h>
 
@@ -32,15 +33,13 @@
 // o situarlas en el path de includes del proyecto.
 
 #include "I2Cdev.h"
-
 #include "MPU6050_6Axis_MotionApps20.h"
 
 // Objeto que representa a la unidad de medición inercial.
 MPU6050 mpu;
 //Create an instance of the object
 HTU21D sensorDeTemperatura;
-
-
+BH1750 sensorDeIntensidadLuminica;
 
 
 //Tamaño maximo buffer trasnmision.
@@ -52,7 +51,9 @@ const int MAX_BUFFER = 100;
 
 // Magnitudes de los sensores.
 float temperaturaCockpit;
-int AcX, AcY, AcZ, GyX, GyY, GyZ, magX, magY, magZ, lux;
+int AcX, AcY, AcZ, GyX, GyY, GyZ, magX, magY, magZ;
+
+uint16_t lux;
 
 int valor = 0;
 unsigned int packetNumber = 0;
@@ -127,69 +128,14 @@ void setup() {
 
   Wire.begin();
   
-  // Serial.println("Configurando MPU6050");
-  // //configure_MPU6050();
-  // mpu.initialize();
-
-  // // verify connection
-  // Serial.println(F("Probando conexion al dispositivo..."));
-  // Serial.println(mpu.testConnection() ? F("MPU6050 conexion correcta") : F("MPU6050 fallo en la conexion"));
-
-  // Serial.println(F("Inicializando DMP..."));
-  // devStatus = mpu.dmpInitialize();
-
-  // // Si el valor es 0 todo ha ido como se esperaba
-  // if (devStatus == 0) {
-  //   // Habilitamos el DMP.
-  //   Serial.println(F("Habilitando DMP..."));
-  //   mpu.setDMPEnabled(true);
-
-  //   // Habilitamos la detección de interrupciones.
-  //   Serial.println(F("Habilitando detección de interrupciones (Arduino external interrupt 0)..."));
-  //   attachInterrupt(0, dmpDataReady, RISING);
-  //   mpuIntStatus = mpu.getIntStatus();
-
-  //   // Ponemos a true el flag dmpReady
-  //   Serial.println(F("DMP list, esperando primera interrupción..."));
-  //   dmpReady = true;
-
-  //   // Establecemos el rango max de escala para el giroscopio.
-  //   uint8_t FS_SEL = 0;
-
-
-  //   // Obtenemos el valor de rango maximo de escala para el giroscopio.
-  //   // Devuelve valores entre 0 y 3
-  //   uint8_t READ_FS_SEL = mpu.getFullScaleGyroRange();
-  //   Serial.print("FS_SEL = ");
-  //   Serial.println(READ_FS_SEL);
-  //   GYRO_FACTOR = 131.0/(FS_SEL + 1);
-    
-
-  //   // Obtenemos rango maximo de escala del acelerometro.
-  //   uint8_t READ_AFS_SEL = mpu.getFullScaleAccelRange();
-  //   Serial.print("AFS_SEL = ");
-  //   Serial.println(READ_AFS_SEL);
-
-  //   // Se obtiene el tamanno maximo de paquete DMP
-  //   packetSize = mpu.dmpGetFIFOPacketSize();
-  // } else {
-  //   // ERROR!
-  //   // 1 = Carga inicial de memoria fallida
-  //   // 2 = Actualizacion de configuracion DMP fallida.
-  //   // (lo habitual es que el error sea 1)
-  //   Serial.print(F("Inicializacion DMP fallida (code "));
-  //   Serial.print(devStatus);
-  //   Serial.println(F(")"));
-  // }
-  
   Serial.println("Configurar Giroscopio (HMC5883L)");
   configurarGiroscopio();
   // Serial.println("Configurar Magnetómetro (HMC5883L)");
   // configurarMagnetometro();
   Serial.println("Configurar Termómetros (HTU210)");
   configurarTermometros();
-  // Serial.println("Configurar Luxómetros (BH1750FVI)");
-  // configurarLuxometros();
+  Serial.println("Configurar Luxómetros (BH1750FVI)");
+  configurarLuxometros();
 
   Serial.println("Obteniendo marca temporal de referencia");
   milsecOffset = millis();
@@ -200,110 +146,15 @@ void setup() {
 }
 
 void loop() {
-  out = "";
   milsec = millis();
   milsec = milsec - milsecOffset;
   
-  // read_MPU6050();
-  // temp = temp/lsbPerDegreeDelSensor;
-  // temp += offsetDelSensor;
-  // temp += calibracionDelSensor;
-
-  //read_MPU6050();
-//   mpu.getMotion6(&AcX, &AcY, &AcZ, &GyX, &GyY, &GyZ);
-
-//   // Si se ha producido la interrupción
-//   if (mpuInterrupt) {
-//     // Reseteamos el flag de interrupción
-//     mpuInterrupt = false;
-//     mpuIntStatus = mpu.getIntStatus();
-  
-//     // Calculamos el número de bytes en FIFO.
-//     fifoCount = mpu.getFIFOCount();
-  
-//     // Comprobamos si hay overflow (Esto no debería pasar)
-//     if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-//       // Reseteamos la FIFO.
-//       mpu.resetFIFO();
-//       // Serial.println(F("FIFO overflow!"));
-  
-//     // En cualquier otro caso, comprobamos que existan datos.
-//     } else if (mpuIntStatus & 0x02) {
-//       // wait for correct available data length, should be a VERY short wait
-//       while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
-
-//       // read a packet from FIFO
-//       mpu.getFIFOBytes(fifoBuffer, packetSize);
-      
-//       // track FIFO count here in case there is > 1 packet available
-//       // (this lets us immediately read more without waiting for an interrupt)
-//       fifoCount -= packetSize;
-      
-      
-//       // Obtain YPR angles from buffer
-//       mpu.dmpGetQuaternion(&q, fifoBuffer);
-//       mpu.dmpGetGravity(&gravity, &q);
-//       mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-
-// /*
-//      Serial.print("DMP:");
-//      Serial.print(ypr[2]*RADIANS_TO_DEGREES, 2);
-//      Serial.print(":");
-//      Serial.print(-ypr[1]*RADIANS_TO_DEGREES, 2);
-//      Serial.print(":");
-//      Serial.println(ypr[0]*RADIANS_TO_DEGREES, 2);
-//  */      
-//     }
-//   }
-
   leerGiroscopio();
   // leerMagnetometro();
   leerTermometros();
-  // leerLuxometros();
+  leerLuxometros();
 
-  out += String(packetNumber);
-  out += ";";
-  out += String(milsec);
-  out += ";";
-  // Primer valor, rotación sobre eje X.
-  // Segundo valor, rotación sobre eje Y.
-  // Tercer valor, rotación sobre eje Z.
-  out += String(ypr[2] * RADIANS_TO_DEGREES);
-  out += ";";
-  out += String(ypr[1] * RADIANS_TO_DEGREES);
-  out += ";";
-  out += String(ypr[0] * RADIANS_TO_DEGREES);
-  out += ";";
-
-  // out += String(AcX);
-  // out += ";";
-  // out += String(AcY);
-  // out += ";";
-  // out += String(AcZ);
-  // out += ";";
-  
-  out += String(temperaturaCockpit);
-  out += ";";
-
-  // out += String(GyX);
-  // out += ";";
-  // out += String(GyY);
-  // out += ";";
-  // out += String(GyZ);
-  // out += ";";
-
-  // out += String(magX);
-  // out += ";";
-  // out += String(magY);
-  // out += ";";
-  // out += String(magZ);
-  // out += ";";
-  
-  out += String(lux);
-
-  out += "\n";
-  //Serial.println("Temperatura: ");
-  //Serial.println(temp/340.00+36.53);
+  prepararPaqueteDeDatos();
 
   Serial.println(out);
   
@@ -419,13 +270,22 @@ void configurarTermometros() {
 }
 
 void configurarLuxometros() {
-  Wire.beginTransmission(BH1750_L);
-  Wire.write(Power_On);
-  Wire.endTransmission(true);
+  // for (int contador = 0; contador < 4; contador++) {
+    // seleccionarSensor(contador);
+    Serial.println("Configurando sensor");
+    sensorDeIntensidadLuminica.begin();
+    // sensorDeIntensidadLuminica.SetAddress(Device_Address_L);
+    // sensorDeIntensidadLuminica.SetMode(Continuous_H_resolution_Mode);
+    // delay(100);
+  // }
+
+  // Wire.beginTransmission(BH1750_L);
+  // Wire.write(Power_On);
+  // Wire.endTransmission(true);
   
-  Wire.beginTransmission(BH1750_L);
-  Wire.write(Continuous_H_resolution_Mode);
-  Wire.endTransmission(true);
+  // Wire.beginTransmission(BH1750_L);
+  // Wire.write(Continuous_H_resolution_Mode);
+  // Wire.endTransmission(true);
 }
 
 void leerGiroscopio() {
@@ -493,8 +353,56 @@ void leerTermometros() {
 }
 
 void leerLuxometros() {
-  Wire.beginTransmission(BH1750_L);
-  Wire.requestFrom(BH1750_L, 2);
-  lux = Wire.read() <<8| Wire.read();
+  // lux = sensorDeIntensidadLuminica.GetLightIntensity();
+  lux = sensorDeIntensidadLuminica.readLightLevel();
+
+  // Wire.beginTransmission(BH1750_L);
+  // Wire.requestFrom(BH1750_L, 2);
+  // lux = Wire.read() <<8| Wire.read();
 }
 
+void prepararPaqueteDeDatos() {
+  out = "";
+
+  out += String(packetNumber);
+  out += ";";
+  out += String(milsec);
+  out += ";";
+  // Primer valor, rotación sobre eje X.
+  // Segundo valor, rotación sobre eje Y.
+  // Tercer valor, rotación sobre eje Z.
+  out += String(ypr[2] * RADIANS_TO_DEGREES);
+  out += ";";
+  out += String(ypr[1] * RADIANS_TO_DEGREES);
+  out += ";";
+  out += String(ypr[0] * RADIANS_TO_DEGREES);
+  out += ";";
+
+  // out += String(AcX);
+  // out += ";";
+  // out += String(AcY);
+  // out += ";";
+  // out += String(AcZ);
+  // out += ";";
+  
+  out += String(temperaturaCockpit);
+  out += ";";
+
+  // out += String(GyX);
+  // out += ";";
+  // out += String(GyY);
+  // out += ";";
+  // out += String(GyZ);
+  // out += ";";
+
+  // out += String(magX);
+  // out += ";";
+  // out += String(magY);
+  // out += ";";
+  // out += String(magZ);
+  // out += ";";
+  
+  out += String(lux);
+
+  out += "\n";
+}
